@@ -11,9 +11,7 @@ import "@ensdomains/ens-contracts/resolvers/profiles/NameResolver.sol";
 import "@ensdomains/ens-contracts/resolvers/profiles/PubkeyResolver.sol";
 import "@ensdomains/ens-contracts/resolvers/profiles/TextResolver.sol";
 import "@ensdomains/ens-contracts/resolvers/Multicallable.sol";
-import {ReverseClaimer} from "@ensdomains/ens-contracts/reverseRegistrar/ReverseClaimer.sol";
 import {INameWrapper} from "@ensdomains/ens-contracts/wrapper/INameWrapper.sol";
-import {NameCoder} from "@ensdomains/ens-contracts/utils/NameCoder.sol";
 
 bytes32 constant ADDR_REVERSE_NODE = 0x91d1777781884d03a6757a803996e38de2a42967fb37eeaca72729271025a9e2;
 bytes32 constant lookup = 0x3031323334353637383961626364656600000000000000000000000000000000;
@@ -29,8 +27,7 @@ contract ConfigResolver is
     InterfaceResolver,
     NameResolver,
     PubkeyResolver,
-    TextResolver,
-    ReverseClaimer
+    TextResolver
 {
     ENS immutable ens;
     INameWrapper immutable nameWrapper;
@@ -53,7 +50,7 @@ contract ConfigResolver is
     // Logged when a delegate is approved or  an approval is revoked.
     event Approved(address owner, bytes32 indexed node, address indexed delegate, bool indexed approved);
 
-    constructor(ENS _ens, INameWrapper wrapperAddress) ReverseClaimer(_ens, msg.sender) {
+    constructor(ENS _ens, INameWrapper wrapperAddress) {
         ens = _ens;
         nameWrapper = wrapperAddress;
     }
