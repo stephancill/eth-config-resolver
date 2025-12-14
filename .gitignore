@@ -11,8 +11,12 @@ out/
 docs/
 
 # Dotenv file
+.env.local
 .env
 
 
 # Node modules
 node_modules/
+
+# macOS
+.DS_Store
