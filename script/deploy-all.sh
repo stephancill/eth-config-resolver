@@ -21,12 +21,12 @@ fi
 
 # Network configuration
 if [ "$NETWORK" == "sepolia" ]; then
-    RPC_URL="https://sepolia.gateway.tenderly.co"
+    RPC_URL="${RPC_URL:-https://sepolia.gateway.tenderly.co}"
     CHAIN_ID=11155111
     EXPLORER_URL="https://sepolia.etherscan.io"
     NETWORK_NAME="Sepolia"
 elif [ "$NETWORK" == "mainnet" ]; then
-    RPC_URL="https://eth.llamarpc.com"
+    RPC_URL="${RPC_URL:-https://eth.llamarpc.com}"
     CHAIN_ID=1
     EXPLORER_URL="https://etherscan.io"
     NETWORK_NAME="Ethereum Mainnet"

@@ -126,55 +126,62 @@ contract ConfigResolver is
     }
 
     /// @dev ENSIP-10 wildcard resolution. Resolves subnames like <address>.parent.eth
-    /// without requiring them to be claimed in ENS.
+    /// without requiring them to be claimed in ENS, and also supports standard resolution
+    /// for manually created names.
     /// @param name The DNS-encoded name to resolve
     /// @param data The ABI-encoded call data (selector + args)
     /// @return The ABI-encoded result of the resolution
     function resolve(bytes calldata name, bytes calldata data) external view override returns (bytes memory) {
-        // Extract the first label (should be a 40-char hex address)
+        // Extract the first label length
         uint256 labelLen = uint8(name[0]);
 
-        // Must be exactly 40 characters for an address
-        if (labelLen != 40) {
-            revert("Invalid label length");
+        // If this is a 40-char hex address label, handle wildcard resolution
+        if (labelLen == 40) {
+            // Parse the hex address from the label
+            bytes memory label = name[1:41];
+            (address resolvedAddr, bool valid) = label.hexToAddress(0, 40);
+            if (!valid) {
+                revert("Invalid hex address");
+            }
+
+            // For text records and other data, we use the address's reverse node
+            // This allows users to set records once and have them resolve under any parent
+            bytes32 addrReverseNode = reverseNode(resolvedAddr);
+
+            // Check which function is being called
+            bytes4 selector = bytes4(data[:4]);
+
+            if (selector == IAddrResolver.addr.selector) {
+                // Return the address encoded in the label
+                return abi.encode(resolvedAddr);
+            }
+
+            if (selector == ITextResolver.text.selector) {
+                // Decode the key from the call data
+                (, string memory key) = abi.decode(data[4:], (bytes32, string));
+                // Look up the stored text record under the address's reverse node
+                string memory value = this.text(addrReverseNode, key);
+                return abi.encode(value);
+            }
+
+            // For other calls, try to forward to the appropriate function
+            // by making a static call to ourselves with the address's reverse node
+            bytes memory newData = abi.encodePacked(selector, addrReverseNode, data[36:]);
+            (bool success, bytes memory result) = address(this).staticcall(newData);
+            if (success) {
+                return result;
+            }
+
+            revert("Unsupported function");
         }
 
-        // Parse the hex address from the label
-        bytes memory label = name[1:41];
-        (address resolvedAddr, bool valid) = label.hexToAddress(0, 40);
-        if (!valid) {
-            revert("Invalid hex address");
-        }
-
-        // For text records and other data, we use the address's reverse node
-        // This allows users to set records once and have them resolve under any parent
-        bytes32 addrReverseNode = reverseNode(resolvedAddr);
-
-        // Check which function is being called
-        bytes4 selector = bytes4(data[:4]);
-
-        if (selector == IAddrResolver.addr.selector) {
-            // Return the address encoded in the label
-            return abi.encode(resolvedAddr);
-        }
-
-        if (selector == ITextResolver.text.selector) {
-            // Decode the key from the call data
-            (, string memory key) = abi.decode(data[4:], (bytes32, string));
-            // Look up the stored text record under the address's reverse node
-            string memory value = this.text(addrReverseNode, key);
-            return abi.encode(value);
-        }
-
-        // For other calls, try to forward to the appropriate function
-        // by making a static call to ourselves with the address's reverse node
-        bytes memory newData = abi.encodePacked(selector, addrReverseNode, data[36:]);
-        (bool success, bytes memory result) = address(this).staticcall(newData);
+        // For non-wildcard queries (e.g., the parent domain itself or any manually created name),
+        // forward the call directly to the inherited resolver functions using the original calldata
+        (bool success, bytes memory result) = address(this).staticcall(data);
         if (success) {
             return result;
         }
-
-        revert("Unsupported function");
+        revert("Resolution failed");
     }
 
     function supportsInterface(bytes4 interfaceID)

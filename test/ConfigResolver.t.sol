@@ -216,13 +216,66 @@ contract ConfigResolverTest is Test {
         assertEq(abi.decode(result2, (string)), "https://alice.example.com");
     }
 
-    function test_WildcardResolveInvalidLabelLength() public {
-        // Test with wrong label length (not 40)
-        bytes memory invalidName = hex"0a6162636465666768696a03657468"; // 10-char label
-        bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
+    function test_StandardResolutionForNonWildcardNames() public {
+        // Test that non-40-char labels fall back to standard resolution
+        // This is the key fix: resolving names like "ethconfig.eth" should work
 
-        vm.expectRevert("Invalid label length");
-        resolver.resolve(invalidName, data);
+        // ENS namehash is computed as: keccak256(namehash(parent) + keccak256(label))
+        // For "test.eth": first compute "eth" node, then "test.eth" node
+        bytes32 ethNode = keccak256(abi.encodePacked(bytes32(0), keccak256("eth")));
+        bytes32 testNode = keccak256(abi.encodePacked(ethNode, keccak256("test")));
+
+        // Set the owner of the nodes so we can set records
+        ens.setSubnodeOwner(bytes32(0), keccak256("eth"), address(this));
+        ens.setSubnodeOwner(ethNode, keccak256("test"), address(this));
+
+        // Set a text record directly using the standard resolver function
+        resolver.setText(testNode, "url", "https://test.example.com");
+
+        // Now resolve via the resolve() function (simulating ENSIP-10 query)
+        // DNS-encoded name: \x04test\x03eth\x00
+        bytes memory dnsName = hex"0474657374036574680000";
+        bytes memory data = abi.encodeWithSelector(ITextResolver.text.selector, testNode, "url");
+
+        bytes memory result = resolver.resolve(dnsName, data);
+        string memory value = abi.decode(result, (string));
+        assertEq(value, "https://test.example.com");
+    }
+
+    function test_StandardResolutionForContentHash() public {
+        // Test that contenthash resolution works for parent domains
+
+        // Create a test node
+        bytes32 ethNode = keccak256(abi.encodePacked(bytes32(0), keccak256("eth")));
+        ens.setSubnodeOwner(bytes32(0), keccak256("eth"), address(this));
+        bytes32 testNode = keccak256(abi.encodePacked(ethNode, keccak256("myname")));
+        ens.setSubnodeOwner(ethNode, keccak256("myname"), address(this));
+
+        // Set a content hash
+        bytes memory contentHash = hex"e301017012208086c3967b9eaa618bb2877c4ebe1e67c8305d0d2b4dc8698cebc9a2f565a933";
+        resolver.setContenthash(testNode, contentHash);
+
+        // Resolve via the resolve() function
+        // DNS-encoded name: \x06myname\x03eth\x00
+        bytes memory dnsName = hex"066d796e616d65036574680000";
+        bytes memory data = abi.encodeWithSelector(bytes4(keccak256("contenthash(bytes32)")), testNode);
+
+        bytes memory result = resolver.resolve(dnsName, data);
+        bytes memory decoded = abi.decode(result, (bytes));
+        assertEq(decoded, contentHash);
+    }
+
+    function test_NonWildcardNameWithNoDataReturnsEmpty() public view {
+        // Test with a non-40-char label that has no data set
+        // Should not revert, should return empty/zero data
+        bytes memory dnsName = hex"0a6162636465666768696a03657468"; // 10-char label "abcdefghij"
+        bytes32 someNode = bytes32(0);
+        bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, someNode);
+
+        // Should not revert - falls back to standard resolution
+        bytes memory result = resolver.resolve(dnsName, data);
+        address resolved = abi.decode(result, (address));
+        assertEq(resolved, address(0)); // No address set, returns zero
     }
 
     function test_WildcardResolveInvalidHex() public {
