@@ -10,14 +10,18 @@ import "@ensdomains/ens-contracts/resolvers/profiles/InterfaceResolver.sol";
 import "@ensdomains/ens-contracts/resolvers/profiles/NameResolver.sol";
 import "@ensdomains/ens-contracts/resolvers/profiles/PubkeyResolver.sol";
 import "@ensdomains/ens-contracts/resolvers/profiles/TextResolver.sol";
+import "@ensdomains/ens-contracts/resolvers/profiles/IExtendedResolver.sol";
+import "@ensdomains/ens-contracts/resolvers/profiles/IAddrResolver.sol";
+import "@ensdomains/ens-contracts/resolvers/profiles/ITextResolver.sol";
 import "@ensdomains/ens-contracts/resolvers/Multicallable.sol";
 import {INameWrapper} from "@ensdomains/ens-contracts/wrapper/INameWrapper.sol";
+import {HexUtils} from "@ensdomains/ens-contracts/utils/HexUtils.sol";
 
 bytes32 constant ADDR_REVERSE_NODE = 0x91d1777781884d03a6757a803996e38de2a42967fb37eeaca72729271025a9e2;
 bytes32 constant lookup = 0x3031323334353637383961626364656600000000000000000000000000000000;
 
 /// A simple resolver anyone can use; only allows the owner of a node to set its
-/// address.
+/// address. Supports ENSIP-10 wildcard resolution for address-based subnames.
 contract ConfigResolver is
     Multicallable,
     ABIResolver,
@@ -27,8 +31,10 @@ contract ConfigResolver is
     InterfaceResolver,
     NameResolver,
     PubkeyResolver,
-    TextResolver
+    TextResolver,
+    IExtendedResolver
 {
+    using HexUtils for bytes;
     ENS immutable ens;
     INameWrapper immutable nameWrapper;
 
@@ -119,6 +125,58 @@ contract ConfigResolver is
         return owner == msg.sender || isApprovedForAll(owner, msg.sender) || isApprovedFor(owner, node, msg.sender);
     }
 
+    /// @dev ENSIP-10 wildcard resolution. Resolves subnames like <address>.parent.eth
+    /// without requiring them to be claimed in ENS.
+    /// @param name The DNS-encoded name to resolve
+    /// @param data The ABI-encoded call data (selector + args)
+    /// @return The ABI-encoded result of the resolution
+    function resolve(bytes calldata name, bytes calldata data) external view override returns (bytes memory) {
+        // Extract the first label (should be a 40-char hex address)
+        uint256 labelLen = uint8(name[0]);
+
+        // Must be exactly 40 characters for an address
+        if (labelLen != 40) {
+            revert("Invalid label length");
+        }
+
+        // Parse the hex address from the label
+        bytes memory label = name[1:41];
+        (address resolvedAddr, bool valid) = label.hexToAddress(0, 40);
+        if (!valid) {
+            revert("Invalid hex address");
+        }
+
+        // For text records and other data, we use the address's reverse node
+        // This allows users to set records once and have them resolve under any parent
+        bytes32 addrReverseNode = reverseNode(resolvedAddr);
+
+        // Check which function is being called
+        bytes4 selector = bytes4(data[:4]);
+
+        if (selector == IAddrResolver.addr.selector) {
+            // Return the address encoded in the label
+            return abi.encode(resolvedAddr);
+        }
+
+        if (selector == ITextResolver.text.selector) {
+            // Decode the key from the call data
+            (, string memory key) = abi.decode(data[4:], (bytes32, string));
+            // Look up the stored text record under the address's reverse node
+            string memory value = this.text(addrReverseNode, key);
+            return abi.encode(value);
+        }
+
+        // For other calls, try to forward to the appropriate function
+        // by making a static call to ourselves with the address's reverse node
+        bytes memory newData = abi.encodePacked(selector, addrReverseNode, data[36:]);
+        (bool success, bytes memory result) = address(this).staticcall(newData);
+        if (success) {
+            return result;
+        }
+
+        revert("Unsupported function");
+    }
+
     function supportsInterface(bytes4 interfaceID)
         public
         view
@@ -135,6 +193,7 @@ contract ConfigResolver is
         )
         returns (bool)
     {
-        return super.supportsInterface(interfaceID);
+        // 0x9061b923 is the interface ID for IExtendedResolver (ENSIP-10)
+        return interfaceID == 0x9061b923 || super.supportsInterface(interfaceID);
     }
 }

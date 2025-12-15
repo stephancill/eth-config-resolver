@@ -57,24 +57,22 @@ echo ""
 echo "Step 1: Deploying ConfigResolver..."
 echo "-----------------------------------"
 
-CONFIG_RESOLVER=$(forge script script/DeployConfigResolver.s.sol:DeployConfigResolver \
+forge script script/DeployConfigResolver.s.sol:DeployConfigResolver \
     --rpc-url $RPC_URL \
     --account deployer \
     --broadcast \
     --verify \
     --etherscan-api-key $ETHERSCAN_API_KEY \
-    -vvv 2>&1 | grep -o 'ConfigResolver deployed at: 0x[a-fA-F0-9]\{40\}' | sed 's/ConfigResolver deployed at: //' | head -1)
+    -vvv
 
-if [ -z "$CONFIG_RESOLVER" ]; then
-    # Try to get from broadcast logs
-    LATEST_RUN=$(find broadcast/DeployConfigResolver.s.sol/$CHAIN_ID -name "run-latest.json" 2>/dev/null | head -1)
-    if [ -n "$LATEST_RUN" ]; then
-        CONFIG_RESOLVER=$(jq -r '.transactions[] | select(.contractName == "ConfigResolver") | .contractAddress' "$LATEST_RUN" 2>/dev/null | head -1)
-    fi
+# Get address from broadcast logs (most reliable method)
+LATEST_RUN="broadcast/DeployConfigResolver.s.sol/$CHAIN_ID/run-latest.json"
+if [ -f "$LATEST_RUN" ]; then
+    CONFIG_RESOLVER=$(jq -r '.transactions[] | select(.contractName == "ConfigResolver") | .contractAddress' "$LATEST_RUN" 2>/dev/null | head -1)
 fi
 
 if [ -z "$CONFIG_RESOLVER" ]; then
-    echo "Error: Failed to deploy ConfigResolver"
+    echo "Error: Failed to deploy ConfigResolver - no address in broadcast logs"
     exit 1
 fi
 
@@ -88,24 +86,22 @@ echo "---------------------------------------------"
 export PARENT_NODE
 export DEFAULT_RESOLVER=$CONFIG_RESOLVER
 
-REGISTRAR=$(forge script script/DeployAddressSubnameRegistrar.s.sol:DeployAddressSubnameRegistrar \
+forge script script/DeployAddressSubnameRegistrar.s.sol:DeployAddressSubnameRegistrar \
     --rpc-url $RPC_URL \
     --account deployer \
     --broadcast \
     --verify \
     --etherscan-api-key $ETHERSCAN_API_KEY \
-    -vvv 2>&1 | grep -o 'AddressSubnameRegistrar deployed at: 0x[a-fA-F0-9]\{40\}' | sed 's/AddressSubnameRegistrar deployed at: //' | head -1)
+    -vvv
 
-if [ -z "$REGISTRAR" ]; then
-    # Try to get from broadcast logs
-    LATEST_RUN=$(find broadcast/DeployAddressSubnameRegistrar.s.sol/$CHAIN_ID -name "run-latest.json" 2>/dev/null | head -1)
-    if [ -n "$LATEST_RUN" ]; then
-        REGISTRAR=$(jq -r '.transactions[] | select(.contractName == "AddressSubnameRegistrar") | .contractAddress' "$LATEST_RUN" 2>/dev/null | head -1)
-    fi
+# Get address from broadcast logs
+LATEST_RUN="broadcast/DeployAddressSubnameRegistrar.s.sol/$CHAIN_ID/run-latest.json"
+if [ -f "$LATEST_RUN" ]; then
+    REGISTRAR=$(jq -r '.transactions[] | select(.contractName == "AddressSubnameRegistrar") | .contractAddress' "$LATEST_RUN" 2>/dev/null | head -1)
 fi
 
 if [ -z "$REGISTRAR" ]; then
-    echo "Error: Failed to deploy AddressSubnameRegistrar"
+    echo "Error: Failed to deploy AddressSubnameRegistrar - no address in broadcast logs"
     exit 1
 fi
 
@@ -133,7 +129,38 @@ echo "=========================================="
 echo "Next Steps"
 echo "=========================================="
 echo ""
-echo "1. Authorize the registrar to create subnames:"
+echo "1. Enable wildcard resolution (set ConfigResolver as parent's resolver):"
+echo ""
+echo "   # If your name is WRAPPED:"
+if [ "$NETWORK" == "sepolia" ]; then
+    NAME_WRAPPER="0x0635513f179D50A207757E05759CbD106d7dFcE8"
+else
+    NAME_WRAPPER="0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401"
+fi
+echo "   cast send $NAME_WRAPPER \\"
+echo "     \"setResolver(bytes32,address)\" \\"
+echo "     $PARENT_NODE \\"
+echo "     $CONFIG_RESOLVER \\"
+echo "     --rpc-url $RPC_URL \\"
+echo "     --account <owner-account>"
+echo ""
+echo "   # If your name is UNWRAPPED:"
+echo "   cast send 0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e \\"
+echo "     \"setResolver(bytes32,address)\" \\"
+echo "     $PARENT_NODE \\"
+echo "     $CONFIG_RESOLVER \\"
+echo "     --rpc-url $RPC_URL \\"
+echo "     --account <owner-account>"
+echo ""
+echo "2. Authorize the registrar to create subnames (for claiming):"
+echo ""
+echo "   # If your name is WRAPPED (recommended):"
+echo "   cast send $NAME_WRAPPER \\"
+echo "     \"setApprovalForAll(address,bool)\" \\"
+echo "     $REGISTRAR \\"
+echo "     true \\"
+echo "     --rpc-url $RPC_URL \\"
+echo "     --account <owner-account>"
 echo ""
 echo "   # If your name is UNWRAPPED:"
 echo "   cast send 0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e \\"
@@ -141,11 +168,14 @@ echo "     \"setOwner(bytes32,address)\" \\"
 echo "     $PARENT_NODE \\"
 echo "     $REGISTRAR \\"
 echo "     --rpc-url $RPC_URL \\"
-echo "     --account deployer"
+echo "     --account <owner-account>"
 echo ""
-echo "   # If your name is WRAPPED (recommended):"
-echo "   # Approve the registrar on NameWrapper"
+echo "3. Users can now:"
+echo "   - Set records (works immediately via wildcard):"
+echo "     cast send $CONFIG_RESOLVER \"setText(bytes32,string,string)\" \\"
+echo "       \$(cast call $CONFIG_RESOLVER \"reverseNode(address)\" \$USER_ADDRESS) \\"
+echo "       \"url\" \"https://example.com\" --rpc-url $RPC_URL --account user"
 echo ""
-echo "2. Users can now claim subnames:"
-echo "   cast send $REGISTRAR \"claim()\" --rpc-url $RPC_URL --account user"
+echo "   - Claim their subname (optional, for ENS ownership):"
+echo "     cast send $REGISTRAR \"claim()\" --rpc-url $RPC_URL --account user"
 echo ""

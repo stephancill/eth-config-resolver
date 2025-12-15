@@ -173,13 +173,76 @@ cast send $NAME_WRAPPER "setApprovalForAll(address,bool)" \
 
 ---
 
-## Step 4: Verify Deployment
+## Step 4: Enable Wildcard Resolution (ENSIP-10)
+
+The ConfigResolver supports wildcard resolution, allowing `<address>.yourname.eth` to resolve without users needing to claim the subname first. This enables:
+
+- **Address resolution**: `<address>.yourname.eth` automatically resolves to that address
+- **Text records**: Users can set records that resolve via any parent name
+
+### Set ConfigResolver as the parent name's resolver
+
+For wildcard resolution to work, your parent name must use the ConfigResolver as its resolver.
+
+**For wrapped names (NameWrapper):**
+
+```bash
+# Set ConfigResolver as the resolver for your parent name
+# Run this from the wrapped name OWNER's account
+cast send $NAME_WRAPPER "setResolver(bytes32,address)" \
+  $PARENT_NODE \
+  $CONFIG_RESOLVER \
+  --rpc-url $RPC_URL \
+  --account <owner-account>
+```
+
+**For unwrapped names (ENS Registry):**
+
+```bash
+cast send $ENS_REGISTRY "setResolver(bytes32,address)" \
+  $PARENT_NODE \
+  $CONFIG_RESOLVER \
+  --rpc-url $RPC_URL \
+  --account <owner-account>
+```
+
+### Verify wildcard support
+
+```bash
+# Check that ConfigResolver supports IExtendedResolver (0x9061b923)
+cast call $CONFIG_RESOLVER "supportsInterface(bytes4)" "0x9061b923" --rpc-url $RPC_URL
+# Should return: true (0x01)
+
+# Check that the parent name uses ConfigResolver
+cast call $ENS_REGISTRY "resolver(bytes32)(address)" $PARENT_NODE --rpc-url $RPC_URL
+# Should return: your CONFIG_RESOLVER address
+```
+
+### How it works
+
+Once enabled, any lookup for `<address>.yourname.eth` will:
+
+1. ENS checks if the subname exists → it doesn't (not claimed)
+2. ENS falls back to the parent's resolver (ConfigResolver)
+3. ConfigResolver's `resolve()` function handles the request:
+   - For `addr()`: Returns the address from the subdomain label
+   - For `text()`: Looks up records stored under the user's reverse node
+
+This means users can set records once (via their reverse node) and have them resolve under any parent name that uses ConfigResolver.
+
+---
+
+## Step 5: Verify Deployment
 
 ### Check ConfigResolver
 
 ```bash
-# Verify it supports the resolver interface
+# Verify it supports the resolver interface (ERC-165)
 cast call $CONFIG_RESOLVER "supportsInterface(bytes4)" "0x01ffc9a7" --rpc-url $RPC_URL
+# Should return: true (0x01)
+
+# Verify it supports wildcard resolution (ENSIP-10)
+cast call $CONFIG_RESOLVER "supportsInterface(bytes4)" "0x9061b923" --rpc-url $RPC_URL
 # Should return: true (0x01)
 ```
 

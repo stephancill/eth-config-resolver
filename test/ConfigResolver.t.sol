@@ -4,9 +4,10 @@ pragma solidity ^0.8.13;
 import {Test} from "forge-std/Test.sol";
 import {ConfigResolver} from "../src/ConfigResolver.sol";
 import {ENSRegistry} from "@ensdomains/ens-contracts/registry/ENSRegistry.sol";
-import {ENS} from "@ensdomains/ens-contracts/registry/ENS.sol";
 import {INameWrapper} from "@ensdomains/ens-contracts/wrapper/INameWrapper.sol";
 import {ReverseRegistrar} from "@ensdomains/ens-contracts/reverseRegistrar/ReverseRegistrar.sol";
+import {IAddrResolver} from "@ensdomains/ens-contracts/resolvers/profiles/IAddrResolver.sol";
+import {ITextResolver} from "@ensdomains/ens-contracts/resolvers/profiles/ITextResolver.sol";
 
 contract ConfigResolverTest is Test {
     ENSRegistry public ens;
@@ -132,5 +133,132 @@ contract ConfigResolverTest is Test {
 
             ret := keccak256(0, 40)
         }
+    }
+
+    // ============ Wildcard Resolution Tests (ENSIP-10) ============
+
+    function test_SupportsExtendedResolverInterface() public view {
+        // 0x9061b923 is the interface ID for IExtendedResolver
+        assertTrue(resolver.supportsInterface(0x9061b923));
+    }
+
+    function test_WildcardResolveAddr() public view {
+        // Test resolving addr() for an unclaimed subname
+        // DNS-encoded name: \x28<40-char-hex>\x06parent\x03eth\x00
+        // For simplicity, we'll use alice's address
+
+        // Build DNS-encoded name for alice's address under "test.eth"
+        bytes memory dnsName = _buildDnsName(alice, "test", "eth");
+
+        // Build the addr(bytes32) call data
+        bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
+
+        // Call resolve
+        bytes memory result = resolver.resolve(dnsName, data);
+
+        // Decode and verify
+        address resolved = abi.decode(result, (address));
+        assertEq(resolved, alice);
+    }
+
+    function test_WildcardResolveText() public {
+        // First, set a text record using alice's reverse node
+        // (text records are stored under the reverse node and looked up via wildcard)
+        bytes32 aliceReverseNode = resolver.reverseNode(alice);
+
+        // Alice sets the text record (she's authorized via reverseNode check)
+        vm.prank(alice);
+        resolver.setText(aliceReverseNode, "url", "https://alice.example.com");
+
+        // Now resolve via wildcard - should find the same record
+        bytes memory dnsName = _buildDnsName(alice, "test", "eth");
+        bytes memory data = abi.encodeWithSelector(
+            ITextResolver.text.selector,
+            bytes32(0), // node (ignored, computed from name)
+            "url"
+        );
+
+        bytes memory result = resolver.resolve(dnsName, data);
+        string memory value = abi.decode(result, (string));
+        assertEq(value, "https://alice.example.com");
+    }
+
+    function test_WildcardResolveEmptyText() public view {
+        // Test resolving text for a key that hasn't been set
+        // (bob hasn't set any records)
+        bytes memory dnsName = _buildDnsName(bob, "test", "eth");
+
+        bytes memory data = abi.encodeWithSelector(ITextResolver.text.selector, bytes32(0), "nonexistent");
+
+        bytes memory result = resolver.resolve(dnsName, data);
+        string memory value = abi.decode(result, (string));
+        assertEq(value, "");
+    }
+
+    function test_WildcardTextSharedAcrossParents() public {
+        // Verify that text records are shared across different parent names
+        bytes32 aliceReverseNode = resolver.reverseNode(alice);
+
+        // Alice sets the text record once
+        vm.prank(alice);
+        resolver.setText(aliceReverseNode, "url", "https://alice.example.com");
+
+        // Should resolve under different parents
+        bytes memory dnsName1 = _buildDnsName(alice, "parent1", "eth");
+        bytes memory dnsName2 = _buildDnsName(alice, "parent2", "eth");
+
+        bytes memory data = abi.encodeWithSelector(ITextResolver.text.selector, bytes32(0), "url");
+
+        bytes memory result1 = resolver.resolve(dnsName1, data);
+        bytes memory result2 = resolver.resolve(dnsName2, data);
+
+        assertEq(abi.decode(result1, (string)), "https://alice.example.com");
+        assertEq(abi.decode(result2, (string)), "https://alice.example.com");
+    }
+
+    function test_WildcardResolveInvalidLabelLength() public {
+        // Test with wrong label length (not 40)
+        bytes memory invalidName = hex"0a6162636465666768696a03657468"; // 10-char label
+        bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
+
+        vm.expectRevert("Invalid label length");
+        resolver.resolve(invalidName, data);
+    }
+
+    function test_WildcardResolveInvalidHex() public {
+        // Test with invalid hex characters (40 chars but not valid hex)
+        // "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" - 40 z's
+        bytes memory invalidName =
+            hex"287a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a04746573740365746800";
+        bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
+
+        vm.expectRevert("Invalid hex address");
+        resolver.resolve(invalidName, data);
+    }
+
+    // Helper to build DNS-encoded name for address.parent.tld
+    function _buildDnsName(address addr, string memory parent, string memory tld) private pure returns (bytes memory) {
+        bytes memory hexAddr = _addressToHexBytes(addr);
+        bytes memory parentBytes = bytes(parent);
+        bytes memory tldBytes = bytes(tld);
+
+        // Format: \x28<40-char-hex>\x<parent-len><parent>\x<tld-len><tld>\x00
+        return abi.encodePacked(
+            uint8(40), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
+        );
+    }
+
+    // Helper to convert address to lowercase hex bytes (40 chars, no 0x)
+    function _addressToHexBytes(address addr) private pure returns (bytes memory) {
+        bytes memory result = new bytes(40);
+        bytes memory hexChars = "0123456789abcdef";
+
+        for (uint256 i = 0; i < 20; i++) {
+            uint8 b = uint8(uint160(addr) >> (8 * (19 - i)));
+            result[i * 2] = hexChars[b >> 4];
+            result[i * 2 + 1] = hexChars[b & 0x0f];
+        }
+
+        return result;
     }
 }
