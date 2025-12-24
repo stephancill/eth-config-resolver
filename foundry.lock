@@ -1,0 +1,8 @@
+{
+  "lib/unruggable-gateways": {
+    "tag": {
+      "name": "v1.3.3",
+      "rev": "8061d898dc86a390689a1d86b3d2690416379e50"
+    }
+  }
+}

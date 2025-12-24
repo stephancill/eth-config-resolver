@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity >=0.8.17 <0.9.0;
+pragma solidity ^0.8.25;
 
 import "@ensdomains/ens-contracts/registry/ENS.sol";
 import {INameWrapper} from "@ensdomains/ens-contracts/wrapper/INameWrapper.sol";

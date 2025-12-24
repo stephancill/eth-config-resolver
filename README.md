@@ -1,15 +1,32 @@
 # ENS Config Resolver
 
-A set of ENS contracts that enable users to claim address-based subnames under your ENS name.
+A set of ENS contracts that enable users to claim address-based subnames under your ENS name, with optional L1 → L2 CCIP-Read resolution.
 
 ## Overview
 
-This project provides two main contracts:
+This project provides three main contracts:
 
 | Contract                    | Description                                                                           |
 | --------------------------- | ------------------------------------------------------------------------------------- |
 | **ConfigResolver**          | A general-purpose ENS resolver for setting records (text, address, contenthash, etc.) |
 | **AddressSubnameRegistrar** | Enables users to claim `<their-address>.yourname.eth` subnames                        |
+| **L1ConfigResolver**        | Reads L2 ConfigResolver records from L1 via CCIP-Read (Unruggable Gateways)           |
+
+## Deployments
+
+### Testnets
+
+| Contract         | Network      | Address                                                                                                                         |
+| ---------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| ConfigResolver   | Base Sepolia | [`0xA66c55a6b76967477af18A03F2f12d52251Dc2C0`](https://sepolia.basescan.org/address/0xA66c55a6b76967477af18A03F2f12d52251Dc2C0) |
+| L1ConfigResolver | Sepolia      | [`0x380e926f5D78F21b80a6EfeF2B3CEf9CcC89356B`](https://sepolia.etherscan.io/address/0x380e926f5D78F21b80a6EfeF2B3CEf9CcC89356B) |
+
+### Mainnet
+
+| Contract         | Network  | Address |
+| ---------------- | -------- | ------- |
+| ConfigResolver   | Base     | TBD     |
+| L1ConfigResolver | Ethereum | TBD     |
 
 ### Example
 
@@ -37,12 +54,57 @@ forge test
 
 ### Deploy
 
-```bash
-# Deploy to Sepolia
-./script/deploy.sh
+Deploy ConfigResolver + AddressSubnameRegistrar:
 
-# Deploy to Mainnet
-./script/deploy.sh mainnet
+```bash
+# Sepolia
+PARENT_NODE=$(cast namehash "yourname.eth") \
+  forge script script/Deploy.s.sol \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+
+# Mainnet
+PARENT_NODE=$(cast namehash "yourname.eth") \
+  forge script script/Deploy.s.sol \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+Deploy ConfigResolver only:
+
+```bash
+forge script script/Deploy.s.sol --sig "deployConfigResolver()" \
+  --rpc-url $RPC_URL \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+Deploy L1ConfigResolver (for reading L2 records from L1):
+
+```bash
+L2_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Resolver()" \
+  --rpc-url $RPC_URL \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+Deploy L1 AddressSubnameRegistrar (for L1 claiming with L2 storage):
+
+```bash
+PARENT_NODE=$(cast namehash "yourname.eth") \
+L1_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Registrar()" \
+  --rpc-url $RPC_URL \
+  --account deployer \
+  --broadcast \
+  --verify
 ```
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full deployment and setup guide.
@@ -90,6 +152,26 @@ registrar.getLabel(addr); // "8d25687829d6b85d9e0020b8c89e3ca24de20a89"
 registrar.node(addr);
 ```
 
+### L1ConfigResolver
+
+An L1 resolver that reads ENS records from a ConfigResolver deployed on L2 (Base) using CCIP-Read:
+
+```solidity
+// Supports standard ENS resolution methods
+resolver.addr(node);           // Get ETH address
+resolver.text(node, "url");    // Get text record
+resolver.contenthash(node);    // Get contenthash
+
+// Also supports ENSIP-10 extended resolution
+resolver.resolve(name, data);
+```
+
+**Verifier Addresses:**
+| Network | Verifier |
+|---------|----------|
+| Sepolia | `0x7F68510F0fD952184ec0b976De429a29A2Ec0FE3` |
+| Mainnet | `0x0bC6c539e5fc1fb92F31dE34426f433557A9A5A2` |
+
 ## Development
 
 ### Prerequisites
@@ -123,25 +205,68 @@ forge snapshot
 
 ## Architecture
 
+### L1 Claiming with L2 Storage (Recommended)
+
+Users claim subnames on L1 (Ethereum) and can change their resolver. Records are stored on L2 (Base) for lower gas costs.
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      User's Wallet                          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│              AddressSubnameRegistrar                        │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │ claim() → creates <address>.parent.eth              │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-┌─────────────────────────┐     ┌─────────────────────────────┐
-│      ENS Registry       │     │      ConfigResolver         │
-│  (stores ownership)     │     │  (stores records)           │
-└─────────────────────────┘     └─────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           L1 (Ethereum)                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   ┌─────────────────────────────┐     ┌───────────────────────────────┐ │
+│   │  AddressSubnameRegistrar    │     │      L1ConfigResolver         │ │
+│   │  ─────────────────────────  │     │  ───────────────────────────  │ │
+│   │  • Users call claim()       │────▶│  • Default resolver for       │ │
+│   │  • Creates ENS node on L1   │     │    claimed subnames           │ │
+│   │                             │     │  • Reads via CCIP-Read        │ │
+│   └─────────────────────────────┘     └───────────────┬───────────────┘ │
+│                                                       │                  │
+│   User owns ENS node → can change resolver if desired │                  │
+└───────────────────────────────────────────────────────┼──────────────────┘
+                                                        │ CCIP-Read
+                                                        ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                             L2 (Base)                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  ConfigResolver - stores records (text, address, contenthash)   │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**User Flow:**
+
+1. Claim subname on L1 → `registrar.claim()`
+2. Set records on L2 → `resolver.setText(node, "url", "https://...")`
+3. L1 resolution reads from L2 via CCIP-Read
+4. Optionally change resolver on L1 (user owns the ENS node)
+
+### CCIP-Read Flow
+
+```
+┌──────────────────┐     1. Call       ┌─────────────────────┐
+│   Your dApp      │ ───────────────►  │  L1ConfigResolver   │
+│   (Frontend)     │                   │  (Ethereum L1)      │
+└──────────────────┘                   └────────┬────────────┘
+        ▲                                       │
+        │                              2. Reverts with
+        │                                 OffchainLookup
+        │                                       │
+        │  5. Return                            ▼
+        │     verified      ┌─────────────────────────────┐
+        │     data          │  Gateway (off-chain)        │
+        │                   └─────────────┬───────────────┘
+        │                                 │
+        │                        3. Fetch proofs from L2
+        │                                 │
+        │                                 ▼
+        │                   ┌─────────────────────────────┐
+        │                   │  ConfigResolver (Base L2)   │
+        │                   └─────────────────────────────┘
+        │                                 │
+        │                        4. Return proofs
+        └─────────────────────────────────┘
 ```
 
 ## License
