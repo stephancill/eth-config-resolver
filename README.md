@@ -9,7 +9,7 @@ This project provides three main contracts:
 | Contract                    | Description                                                                           |
 | --------------------------- | ------------------------------------------------------------------------------------- |
 | **ConfigResolver**          | A general-purpose ENS resolver for setting records (text, address, contenthash, etc.) |
-| **AddressSubnameRegistrar** | Enables users to claim `<their-address>.yourname.eth` subnames                        |
+| **AddressSubnameRegistrar** | Enables users to claim `0x<address>.yourname.eth` subnames                            |
 | **L1ConfigResolver**        | Reads L2 ConfigResolver records from L1 via CCIP-Read (Unruggable Gateways)           |
 
 ## Deployments
@@ -33,10 +33,10 @@ This project provides three main contracts:
 If you own `ethconfig.eth`, users can claim subnames like:
 
 ```
-8d25687829d6b85d9e0020b8c89e3ca24de20a89.ethconfig.eth
+0x8d25687829d6b85d9e0020b8c89e3ca24de20a89.ethconfig.eth
 ```
 
-The address is normalized to lowercase hex (40 characters, no `0x` prefix).
+The address is normalized to lowercase hex with the `0x` prefix (42 characters total).
 
 ## Quick Start
 
@@ -146,7 +146,7 @@ registrar.claimForAddr(addr, owner);
 registrar.available(addr);
 
 // Get the label for an address
-registrar.getLabel(addr); // "8d25687829d6b85d9e0020b8c89e3ca24de20a89"
+registrar.getLabel(addr); // "0x8d25687829d6b85d9e0020b8c89e3ca24de20a89"
 
 // Get the node hash
 registrar.node(addr);
@@ -154,7 +154,7 @@ registrar.node(addr);
 
 ### L1ConfigResolver
 
-An L1 resolver that reads ENS records from a ConfigResolver deployed on L2 (Base) using CCIP-Read:
+An L1 resolver that reads ENS records from a ConfigResolver deployed on L2 (Base) using CCIP-Read. Implements the `IL1ConfigResolver` interface.
 
 ```solidity
 // Supports standard ENS resolution methods
@@ -164,13 +164,19 @@ resolver.contenthash(node);    // Get contenthash
 
 // Also supports ENSIP-10 extended resolution
 resolver.resolve(name, data);
+
+// IL1ConfigResolver interface
+resolver.l2ChainId();          // Get the L2 chain ID
+resolver.l2ConfigResolver();   // Get the L2 ConfigResolver address
 ```
 
-**Verifier Addresses:**
-| Network | Verifier |
-|---------|----------|
-| Sepolia | `0x7F68510F0fD952184ec0b976De429a29A2Ec0FE3` |
-| Mainnet | `0x0bC6c539e5fc1fb92F31dE34426f433557A9A5A2` |
+**Default Verifiers (Base):**
+| Network | Verifier | L2 Chain ID |
+|---------|----------|-------------|
+| Sepolia | `0x7F68510F0fD952184ec0b976De429a29A2Ec0FE3` | 84532 (Base Sepolia) |
+| Mainnet | `0x0bC6c539e5fc1fb92F31dE34426f433557A9A5A2` | 8453 (Base) |
+
+Custom verifiers and L2 chain IDs can be specified via environment variables during deployment.
 
 ## Development
 

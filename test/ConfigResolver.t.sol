@@ -279,10 +279,10 @@ contract ConfigResolverTest is Test {
     }
 
     function test_WildcardResolveInvalidHex() public {
-        // Test with invalid hex characters (40 chars but not valid hex)
-        // "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" - 40 z's
+        // Test with invalid hex characters (42 chars with 0x prefix but invalid hex after)
+        // "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" - 0x + 40 z's
         bytes memory invalidName =
-            hex"287a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a04746573740365746800";
+            hex"2a30787a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a04746573740365746800";
         bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
 
         vm.expectRevert("Invalid hex address");
@@ -363,27 +363,29 @@ contract ConfigResolverTest is Test {
         assertEq(resolved, testAddr);
     }
 
-    // Helper to build DNS-encoded name for address.parent.tld
+    // Helper to build DNS-encoded name for 0xaddress.parent.tld
     function _buildDnsName(address addr, string memory parent, string memory tld) private pure returns (bytes memory) {
         bytes memory hexAddr = _addressToHexBytes(addr);
         bytes memory parentBytes = bytes(parent);
         bytes memory tldBytes = bytes(tld);
 
-        // Format: \x28<40-char-hex>\x<parent-len><parent>\x<tld-len><tld>\x00
+        // Format: \x2a<42-char-hex-with-0x>\x<parent-len><parent>\x<tld-len><tld>\x00
         return abi.encodePacked(
-            uint8(40), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
+            uint8(42), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
         );
     }
 
-    // Helper to convert address to lowercase hex bytes (40 chars, no 0x)
+    // Helper to convert address to lowercase hex bytes (42 chars, with 0x prefix)
     function _addressToHexBytes(address addr) private pure returns (bytes memory) {
-        bytes memory result = new bytes(40);
+        bytes memory result = new bytes(42);
         bytes memory hexChars = "0123456789abcdef";
 
+        result[0] = "0";
+        result[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
             uint8 b = uint8(uint160(addr) >> (8 * (19 - i)));
-            result[i * 2] = hexChars[b >> 4];
-            result[i * 2 + 1] = hexChars[b & 0x0f];
+            result[2 + i * 2] = hexChars[b >> 4];
+            result[2 + i * 2 + 1] = hexChars[b & 0x0f];
         }
 
         return result;
@@ -400,7 +402,7 @@ contract ConfigResolverTest is Test {
         bytes memory tldBytes = bytes(tld);
 
         return abi.encodePacked(
-            uint8(40), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
+            uint8(42), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
         );
     }
 
@@ -415,16 +417,19 @@ contract ConfigResolverTest is Test {
         bytes memory tldBytes = bytes(tld);
 
         return abi.encodePacked(
-            uint8(40), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
+            uint8(42), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
         );
     }
 
-    // Helper to convert address to checksummed hex bytes (EIP-55)
+    // Helper to convert address to checksummed hex bytes (EIP-55) with 0x prefix
     function _addressToChecksummedHexBytes(address addr) private pure returns (bytes memory) {
-        bytes memory result = new bytes(40);
+        bytes memory result = new bytes(42);
         bytes memory hexCharsLower = "0123456789abcdef";
 
-        // First, create lowercase hex string
+        result[0] = "0";
+        result[1] = "x";
+
+        // First, create lowercase hex string (without 0x for hashing)
         bytes memory lowercase = new bytes(40);
         for (uint256 i = 0; i < 20; i++) {
             uint8 b = uint8(uint160(addr) >> (8 * (19 - i)));
@@ -447,24 +452,26 @@ contract ConfigResolverTest is Test {
             uint8 charCode = uint8(lowercase[i]);
             // If it's a letter (a-f) and hash nibble >= 8, uppercase it
             if (charCode >= 97 && charCode <= 102 && hashNibble >= 8) {
-                result[i] = bytes1(charCode - 32); // Convert to uppercase
+                result[2 + i] = bytes1(charCode - 32); // Convert to uppercase
             } else {
-                result[i] = lowercase[i];
+                result[2 + i] = lowercase[i];
             }
         }
 
         return result;
     }
 
-    // Helper to convert address to uppercase hex bytes (40 chars, no 0x)
+    // Helper to convert address to uppercase hex bytes (42 chars, with 0x prefix)
     function _addressToUppercaseHexBytes(address addr) private pure returns (bytes memory) {
-        bytes memory result = new bytes(40);
+        bytes memory result = new bytes(42);
         bytes memory hexChars = "0123456789ABCDEF";
 
+        result[0] = "0";
+        result[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
             uint8 b = uint8(uint160(addr) >> (8 * (19 - i)));
-            result[i * 2] = hexChars[b >> 4];
-            result[i * 2 + 1] = hexChars[b & 0x0f];
+            result[2 + i * 2] = hexChars[b >> 4];
+            result[2 + i * 2 + 1] = hexChars[b & 0x0f];
         }
 
         return result;

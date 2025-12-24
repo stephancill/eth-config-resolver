@@ -63,14 +63,14 @@ contract AddressSubnameRegistrarTest is Test {
         // Log the label for verification
         string memory label = registrar.getLabel(alice);
         console.log("Alice's subname label:", label);
-        // Should be: 8d25687829d6b85d9e0020b8c89e3ca24de20a89
+        // Should be: 0x8d25687829d6b85d9e0020b8c89e3ca24de20a89
     }
 
     function test_LabelIsNormalizedLowercase() public {
         // The address 0x8d25687829D6b85d9e0020B8c89e3Ca24dE20a89
-        // should produce label: 8d25687829d6b85d9e0020b8c89e3ca24de20a89
+        // should produce label: 0x8d25687829d6b85d9e0020b8c89e3ca24de20a89
         string memory label = registrar.getLabel(alice);
-        assertEq(label, "8d25687829d6b85d9e0020b8c89e3ca24de20a89");
+        assertEq(label, "0x8d25687829d6b85d9e0020b8c89e3ca24de20a89");
     }
 
     function test_CannotClaimSameSubnameTwice() public {

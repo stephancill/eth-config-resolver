@@ -7,7 +7,7 @@ This guide walks you through deploying and configuring the `ConfigResolver`, `Ad
 | Contract                  | Purpose                                                               |
 | ------------------------- | --------------------------------------------------------------------- |
 | `ConfigResolver`          | A general-purpose ENS resolver that allows name owners to set records |
-| `AddressSubnameRegistrar` | Allows users to claim `<address>.yourname.eth` subnames               |
+| `AddressSubnameRegistrar` | Allows users to claim `0x<address>.yourname.eth` subnames             |
 | `L1ConfigResolver`        | Reads L2 ConfigResolver records from L1 via CCIP-Read                 |
 
 ## Architecture Options
@@ -52,7 +52,7 @@ Users claim subnames on L1 (Ethereum), but records are stored on L2 (Base) for l
 
 **User Flow:**
 
-1. User calls `claim()` on L1 `AddressSubnameRegistrar` → creates `<address>.parent.eth` in ENS
+1. User calls `claim()` on L1 `AddressSubnameRegistrar` → creates `0x<address>.parent.eth` in ENS
 2. Subname is created with `L1ConfigResolver` as the resolver
 3. User sets records on L2 `ConfigResolver` (low gas)
 4. L1 resolution reads from L2 via CCIP-Read
@@ -157,6 +157,30 @@ L2_CONFIG_RESOLVER=0x... \
   --verify
 ```
 
+**Environment Variables:**
+
+| Variable             | Required | Default           | Description                     |
+| -------------------- | -------- | ----------------- | ------------------------------- |
+| `L2_CONFIG_RESOLVER` | Yes      | -                 | Address of ConfigResolver on L2 |
+| `VERIFIER`           | No       | Chain-dependent\* | Gateway verifier address        |
+| `L2_CHAIN_ID`        | No       | Chain-dependent\* | L2 chain ID                     |
+
+\*Defaults: Mainnet → Base (8453) with `0x0bC6c539e5fc1fb92F31dE34426f433557A9A5A2`, Sepolia → Base Sepolia (84532) with `0x7F68510F0fD952184ec0b976De429a29A2Ec0FE3`
+
+**Custom L2 deployment (non-Base chains):**
+
+```bash
+# Example: Deploy for Arbitrum
+VERIFIER=0x... \
+L2_CHAIN_ID=42161 \
+L2_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Resolver()" \
+  --rpc-url $RPC_URL \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
 ### Deploy L1 AddressSubnameRegistrar (Option A)
 
 For L1 claiming with L2 storage - deploy after L1ConfigResolver:
@@ -216,7 +240,7 @@ cast send $NAME_WRAPPER "setApprovalForAll(address,bool)" \
 
 ## Step 3: Enable Wildcard Resolution (ENSIP-10)
 
-The ConfigResolver supports wildcard resolution, allowing `<address>.yourname.eth` to resolve without users needing to claim the subname first.
+The ConfigResolver supports wildcard resolution, allowing `0x<address>.yourname.eth` to resolve without users needing to claim the subname first.
 
 ### Set ConfigResolver as the parent name's resolver
 
@@ -278,11 +302,14 @@ cast call $REGISTRAR "available(address)" "0x8d25687829D6b85d9e0020B8c89e3Ca24dE
 cast call $L1_RESOLVER "supportsInterface(bytes4)" "0x9061b923" --rpc-url $RPC_URL
 # Should return: true (0x01)
 
+# Check the L2 chain ID
+cast call $L1_RESOLVER "l2ChainId()(uint256)" --rpc-url $RPC_URL
+
 # Check the L2 target
-cast call $L1_RESOLVER "l2ConfigResolver()" --rpc-url $RPC_URL
+cast call $L1_RESOLVER "l2ConfigResolver()(address)" --rpc-url $RPC_URL
 
 # Check the verifier
-cast call $L1_RESOLVER "verifier()" --rpc-url $RPC_URL
+cast call $L1_RESOLVER "verifier()(address)" --rpc-url $RPC_URL
 ```
 
 ---
@@ -300,7 +327,7 @@ cast send $REGISTRAR "claim()" \
   --account user-wallet
 ```
 
-This creates `<address>.yourname.eth` for the caller.
+This creates `0x<address>.yourname.eth` for the caller (e.g., `0x8d25687829d6b85d9e0020b8c89e3ca24de20a89.yourname.eth`).
 
 ### Setting Records on Claimed Subnames
 

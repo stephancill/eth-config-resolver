@@ -22,6 +22,9 @@ import {IGatewayVerifier} from "@unruggable/contracts/IGatewayVerifier.sol";
 ///
 ///   # Deploy L1ConfigResolver (for reading L2 records from L1)
 ///   L2_CONFIG_RESOLVER=0x... forge script script/Deploy.s.sol --sig "deployL1Resolver()" --rpc-url $RPC_URL --account deployer --broadcast --verify
+///
+///   # Deploy L1ConfigResolver with custom verifier/chain (e.g., for non-Base L2s)
+///   VERIFIER=0x... L2_CHAIN_ID=42161 L2_CONFIG_RESOLVER=0x... forge script script/Deploy.s.sol --sig "deployL1Resolver()" --rpc-url $RPC_URL --account deployer --broadcast --verify
 contract Deploy is Script {
     // ============ Chain IDs ============
     uint256 constant MAINNET = 1;
@@ -80,15 +83,23 @@ contract Deploy is Script {
         }
     }
 
-    function _getVerifier() internal view returns (IGatewayVerifier) {
+    function _getDefaultVerifier() internal view returns (address) {
         if (block.chainid == MAINNET) {
-            return MAINNET_VERIFIER;
+            return address(MAINNET_VERIFIER);
         } else if (block.chainid == SEPOLIA) {
-            return SEPOLIA_VERIFIER;
+            return address(SEPOLIA_VERIFIER);
         } else {
-            revert(
-                "L1ConfigResolver can only be deployed on L1 (Mainnet or Sepolia)"
-            );
+            return address(0);
+        }
+    }
+
+    function _getDefaultL2ChainId() internal view returns (uint256) {
+        if (block.chainid == MAINNET) {
+            return BASE_MAINNET;
+        } else if (block.chainid == SEPOLIA) {
+            return BASE_SEPOLIA;
+        } else {
+            return 0;
         }
     }
 
@@ -210,10 +221,27 @@ contract Deploy is Script {
 
     /// @notice Deploy L1ConfigResolver for reading L2 records from L1
     /// @dev Requires L2_CONFIG_RESOLVER environment variable
+    ///      Optional overrides: VERIFIER, L2_CHAIN_ID
     /// @return resolver The deployed L1ConfigResolver address
     function deployL1Resolver() public returns (L1ConfigResolver resolver) {
         address l2ConfigResolver = vm.envAddress("L2_CONFIG_RESOLVER");
-        IGatewayVerifier verifier = _getVerifier();
+
+        // Get verifier (env override or default for chain)
+        address defaultVerifier = _getDefaultVerifier();
+        address verifierAddr = vm.envOr("VERIFIER", defaultVerifier);
+        require(
+            verifierAddr != address(0),
+            "VERIFIER required: no default for this chain"
+        );
+        IGatewayVerifier verifier = IGatewayVerifier(verifierAddr);
+
+        // Get L2 chain ID (env override or default for chain)
+        uint256 defaultL2ChainId = _getDefaultL2ChainId();
+        uint256 l2ChainId = vm.envOr("L2_CHAIN_ID", defaultL2ChainId);
+        require(
+            l2ChainId != 0,
+            "L2_CHAIN_ID required: no default for this chain"
+        );
 
         console.log("");
         console.log("==========================================");
@@ -221,12 +249,19 @@ contract Deploy is Script {
         console.log("==========================================");
         console.log("Network:", _getNetworkName());
         console.log("Chain ID:", block.chainid);
-        console.log("Gateway Verifier:", address(verifier));
+        console.log("Gateway Verifier:", verifierAddr);
+        if (verifierAddr != defaultVerifier) {
+            console.log("  (overridden via VERIFIER env var)");
+        }
+        console.log("L2 Chain ID:", l2ChainId);
+        if (l2ChainId != defaultL2ChainId) {
+            console.log("  (overridden via L2_CHAIN_ID env var)");
+        }
         console.log("L2 ConfigResolver:", l2ConfigResolver);
         console.log("");
 
         vm.startBroadcast();
-        resolver = new L1ConfigResolver(verifier, l2ConfigResolver);
+        resolver = new L1ConfigResolver(verifier, l2ChainId, l2ConfigResolver);
         vm.stopBroadcast();
 
         console.log("L1ConfigResolver deployed at:", address(resolver));
