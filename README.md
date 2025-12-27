@@ -16,10 +16,10 @@ This project provides two main contracts:
 If you own `ethconfig.eth`, users can claim subnames like:
 
 ```
-8d25687829d6b85d9e0020b8c89e3ca24de20a89.ethconfig.eth
+0x8d25687829d6b85d9e0020b8c89e3ca24de20a89.ethconfig.eth
 ```
 
-The address is normalized to lowercase hex (40 characters, no `0x` prefix).
+The address is normalized to lowercase hex (42 characters, with `0x` prefix).
 
 ## Quick Start
 
@@ -84,7 +84,7 @@ registrar.claimForAddr(addr, owner);
 registrar.available(addr);
 
 // Get the label for an address
-registrar.getLabel(addr); // "8d25687829d6b85d9e0020b8c89e3ca24de20a89"
+registrar.getLabel(addr); // "0x8d25687829d6b85d9e0020b8c89e3ca24de20a89"
 
 // Get the node hash
 registrar.node(addr);
