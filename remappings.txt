@@ -1,6 +1,6 @@
-forge-std/=node_modules/forge-std/src/
+forge-std/=lib/forge-std/src/
 @ensdomains/ens-contracts/=node_modules/@ensdomains/ens-contracts/contracts/
-@unruggable/gateways/=node_modules/@unruggable/gateways/contracts
+@unruggable/=lib/unruggable-gateways/
 @openzeppelin/contracts-v5/=node_modules/@openzeppelin/contracts-v5/
 @openzeppelin/contracts/=node_modules/@openzeppelin/contracts/
 clones-with-immutable-args/=node_modules/clones-with-immutable-args/

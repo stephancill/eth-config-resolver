@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.25;
 
 import {Test} from "forge-std/Test.sol";
 import {ConfigResolver} from "../src/ConfigResolver.sol";
@@ -279,37 +279,199 @@ contract ConfigResolverTest is Test {
     }
 
     function test_WildcardResolveInvalidHex() public {
-        // Test with invalid hex characters (40 chars but not valid hex)
-        // "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" - 40 z's
+        // Test with invalid hex characters (42 chars with 0x prefix but invalid hex after)
+        // "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" - 0x + 40 z's
         bytes memory invalidName =
-            hex"287a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a04746573740365746800";
+            hex"2a30787a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a04746573740365746800";
         bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
 
         vm.expectRevert("Invalid hex address");
         resolver.resolve(invalidName, data);
     }
 
-    // Helper to build DNS-encoded name for address.parent.tld
+    function test_WildcardResolveChecksummedAddress() public {
+        // Test that checksummed (mixed case) addresses resolve correctly
+        // Using a well-known checksummed address format
+        address testAddr = 0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B;
+
+        // Build DNS name with checksummed address (mixed case)
+        bytes memory checksummedName = _buildDnsNameWithChecksummedAddress(testAddr, "test", "eth");
+
+        // Build the addr(bytes32) call data
+        bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
+
+        // Call resolve - should work with checksummed address
+        bytes memory result = resolver.resolve(checksummedName, data);
+
+        // Decode and verify
+        address resolved = abi.decode(result, (address));
+        assertEq(resolved, testAddr);
+    }
+
+    function test_WildcardResolveChecksummedAndLowercaseReturnSameResult() public {
+        // Verify that both checksummed and lowercase addresses resolve to the same result
+        address testAddr = 0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B;
+
+        // Set up a text record for this address
+        bytes32 addrReverseNode = resolver.reverseNode(testAddr);
+
+        // We need to give testAddr ownership of their reverse node
+        vm.prank(testAddr);
+        reverseRegistrar.claimForAddr(testAddr, testAddr, address(resolver));
+
+        vm.prank(testAddr);
+        resolver.setText(addrReverseNode, "url", "https://vitalik.example.com");
+
+        // Build DNS names with both formats
+        bytes memory lowercaseName = _buildDnsName(testAddr, "test", "eth");
+        bytes memory checksummedName = _buildDnsNameWithChecksummedAddress(testAddr, "test", "eth");
+
+        bytes memory textData = abi.encodeWithSelector(ITextResolver.text.selector, bytes32(0), "url");
+
+        // Both should return the same text record
+        bytes memory result1 = resolver.resolve(lowercaseName, textData);
+        bytes memory result2 = resolver.resolve(checksummedName, textData);
+
+        assertEq(abi.decode(result1, (string)), "https://vitalik.example.com");
+        assertEq(abi.decode(result2, (string)), "https://vitalik.example.com");
+
+        // Both should also return the same address
+        bytes memory addrData = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
+
+        bytes memory addrResult1 = resolver.resolve(lowercaseName, addrData);
+        bytes memory addrResult2 = resolver.resolve(checksummedName, addrData);
+
+        assertEq(abi.decode(addrResult1, (address)), testAddr);
+        assertEq(abi.decode(addrResult2, (address)), testAddr);
+    }
+
+    function test_WildcardResolveUppercaseAddress() public view {
+        // Test with fully uppercase address (another edge case)
+        address testAddr = 0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B;
+
+        // Build DNS name with uppercase address
+        bytes memory uppercaseName = _buildDnsNameWithUppercaseAddress(testAddr, "test", "eth");
+
+        // Build the addr(bytes32) call data
+        bytes memory data = abi.encodeWithSelector(IAddrResolver.addr.selector, bytes32(0));
+
+        // Call resolve - should work with uppercase address
+        bytes memory result = resolver.resolve(uppercaseName, data);
+
+        // Decode and verify
+        address resolved = abi.decode(result, (address));
+        assertEq(resolved, testAddr);
+    }
+
+    // Helper to build DNS-encoded name for 0xaddress.parent.tld
     function _buildDnsName(address addr, string memory parent, string memory tld) private pure returns (bytes memory) {
         bytes memory hexAddr = _addressToHexBytes(addr);
         bytes memory parentBytes = bytes(parent);
         bytes memory tldBytes = bytes(tld);
 
-        // Format: \x28<40-char-hex>\x<parent-len><parent>\x<tld-len><tld>\x00
+        // Format: \x2a<42-char-hex-with-0x>\x<parent-len><parent>\x<tld-len><tld>\x00
         return abi.encodePacked(
-            uint8(40), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
+            uint8(42), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
         );
     }
 
-    // Helper to convert address to lowercase hex bytes (40 chars, no 0x)
+    // Helper to convert address to lowercase hex bytes (42 chars, with 0x prefix)
     function _addressToHexBytes(address addr) private pure returns (bytes memory) {
-        bytes memory result = new bytes(40);
+        bytes memory result = new bytes(42);
         bytes memory hexChars = "0123456789abcdef";
 
+        result[0] = "0";
+        result[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
             uint8 b = uint8(uint160(addr) >> (8 * (19 - i)));
-            result[i * 2] = hexChars[b >> 4];
-            result[i * 2 + 1] = hexChars[b & 0x0f];
+            result[2 + i * 2] = hexChars[b >> 4];
+            result[2 + i * 2 + 1] = hexChars[b & 0x0f];
+        }
+
+        return result;
+    }
+
+    // Helper to build DNS-encoded name with checksummed address
+    function _buildDnsNameWithChecksummedAddress(address addr, string memory parent, string memory tld)
+        private
+        pure
+        returns (bytes memory)
+    {
+        bytes memory hexAddr = _addressToChecksummedHexBytes(addr);
+        bytes memory parentBytes = bytes(parent);
+        bytes memory tldBytes = bytes(tld);
+
+        return abi.encodePacked(
+            uint8(42), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
+        );
+    }
+
+    // Helper to build DNS-encoded name with uppercase address
+    function _buildDnsNameWithUppercaseAddress(address addr, string memory parent, string memory tld)
+        private
+        pure
+        returns (bytes memory)
+    {
+        bytes memory hexAddr = _addressToUppercaseHexBytes(addr);
+        bytes memory parentBytes = bytes(parent);
+        bytes memory tldBytes = bytes(tld);
+
+        return abi.encodePacked(
+            uint8(42), hexAddr, uint8(parentBytes.length), parentBytes, uint8(tldBytes.length), tldBytes, uint8(0)
+        );
+    }
+
+    // Helper to convert address to checksummed hex bytes (EIP-55) with 0x prefix
+    function _addressToChecksummedHexBytes(address addr) private pure returns (bytes memory) {
+        bytes memory result = new bytes(42);
+        bytes memory hexCharsLower = "0123456789abcdef";
+
+        result[0] = "0";
+        result[1] = "x";
+
+        // First, create lowercase hex string (without 0x for hashing)
+        bytes memory lowercase = new bytes(40);
+        for (uint256 i = 0; i < 20; i++) {
+            uint8 b = uint8(uint160(addr) >> (8 * (19 - i)));
+            lowercase[i * 2] = hexCharsLower[b >> 4];
+            lowercase[i * 2 + 1] = hexCharsLower[b & 0x0f];
+        }
+
+        // Hash the lowercase address for checksum
+        bytes32 hash = keccak256(lowercase);
+
+        // Apply checksum (EIP-55)
+        for (uint256 i = 0; i < 40; i++) {
+            uint8 hashNibble = uint8(hash[i / 2]);
+            if (i % 2 == 0) {
+                hashNibble = hashNibble >> 4;
+            } else {
+                hashNibble = hashNibble & 0x0f;
+            }
+
+            uint8 charCode = uint8(lowercase[i]);
+            // If it's a letter (a-f) and hash nibble >= 8, uppercase it
+            if (charCode >= 97 && charCode <= 102 && hashNibble >= 8) {
+                result[2 + i] = bytes1(charCode - 32); // Convert to uppercase
+            } else {
+                result[2 + i] = lowercase[i];
+            }
+        }
+
+        return result;
+    }
+
+    // Helper to convert address to uppercase hex bytes (42 chars, with 0x prefix)
+    function _addressToUppercaseHexBytes(address addr) private pure returns (bytes memory) {
+        bytes memory result = new bytes(42);
+        bytes memory hexChars = "0123456789ABCDEF";
+
+        result[0] = "0";
+        result[1] = "x";
+        for (uint256 i = 0; i < 20; i++) {
+            uint8 b = uint8(uint160(addr) >> (8 * (19 - i)));
+            result[2 + i * 2] = hexChars[b >> 4];
+            result[2 + i * 2 + 1] = hexChars[b & 0x0f];
         }
 
         return result;

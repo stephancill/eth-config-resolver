@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity >=0.8.17 <0.9.0;
+pragma solidity ^0.8.25;
 
 import "@ensdomains/ens-contracts/registry/ENS.sol";
 import {INameWrapper} from "@ensdomains/ens-contracts/wrapper/INameWrapper.sol";
@@ -87,11 +87,13 @@ contract AddressSubnameRegistrar {
 
     /// @notice Get the label (hex address) for a given address
     /// @param addr The address
-    /// @return The lowercase hex string (40 characters, no 0x prefix)
+    /// @return The lowercase hex string (42 characters, with 0x prefix)
     function getLabel(address addr) public pure returns (string memory) {
-        bytes memory ret = new bytes(40);
+        bytes memory ret = new bytes(42);
+        ret[0] = "0";
+        ret[1] = "x";
         uint160 addrVal = uint160(addr);
-        for (uint256 i = 40; i > 0;) {
+        for (uint256 i = 42; i > 2;) {
             unchecked {
                 i--;
                 ret[i] = bytes1(uint8(lookup[addrVal & 0xf]));
@@ -145,10 +147,14 @@ contract AddressSubnameRegistrar {
         ens.setSubnodeRecord(parentNode, labelHash, owner, defaultResolver, 0);
     }
 
-    /// @dev Compute the keccak256 hash of the lowercase hex representation of an address
+    /// @dev Compute the keccak256 hash of the lowercase hex representation of an address with 0x prefix
     function sha3HexAddress(address addr) internal pure returns (bytes32 ret) {
         assembly {
-            for { let i := 40 } gt(i, 0) {} {
+            // Store "0x" prefix at positions 0-1
+            mstore8(0, 0x30) // '0' = 0x30
+            mstore8(1, 0x78) // 'x' = 0x78
+            // Store hex address starting at position 2
+            for { let i := 42 } gt(i, 2) {} {
                 i := sub(i, 1)
                 mstore8(i, byte(and(addr, 0xf), lookup))
                 addr := div(addr, 0x10)
@@ -156,7 +162,7 @@ contract AddressSubnameRegistrar {
                 mstore8(i, byte(and(addr, 0xf), lookup))
                 addr := div(addr, 0x10)
             }
-            ret := keccak256(0, 40)
+            ret := keccak256(0, 42)
         }
     }
 }

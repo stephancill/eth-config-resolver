@@ -1,13 +1,73 @@
 # Deployment & Setup Guide
 
-This guide walks you through deploying and configuring the `ConfigResolver` and `AddressSubnameRegistrar` contracts.
+This guide walks you through deploying and configuring the `ConfigResolver`, `AddressSubnameRegistrar`, and `L1ConfigResolver` contracts.
 
 ## Overview
 
 | Contract                  | Purpose                                                               |
 | ------------------------- | --------------------------------------------------------------------- |
 | `ConfigResolver`          | A general-purpose ENS resolver that allows name owners to set records |
-| `AddressSubnameRegistrar` | Allows users to claim `<address>.yourname.eth` subnames               |
+| `AddressSubnameRegistrar` | Allows users to claim `0x<address>.yourname.eth` subnames             |
+| `L1ConfigResolver`        | Reads L2 ConfigResolver records from L1 via CCIP-Read                 |
+
+## Architecture Options
+
+### Option A: L1 Claiming with L2 Storage (Recommended)
+
+Users claim subnames on L1 (Ethereum), but records are stored on L2 (Base) for lower gas costs. Users can optionally change their resolver.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           L1 (Ethereum)                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   ┌─────────────────────────────┐     ┌───────────────────────────────┐ │
+│   │  AddressSubnameRegistrar    │     │      L1ConfigResolver         │ │
+│   │  ─────────────────────────  │     │  ───────────────────────────  │ │
+│   │  • Users call claim()       │────▶│  • Default resolver for       │ │
+│   │  • Creates ENS node on L1   │     │    claimed subnames           │ │
+│   │  • Sets resolver to         │     │  • Reads records via          │ │
+│   │    L1ConfigResolver         │     │    CCIP-Read from L2          │ │
+│   └─────────────────────────────┘     └───────────────┬───────────────┘ │
+│                                                       │                  │
+│   User owns ENS node → can change resolver if desired │                  │
+│                                                       │                  │
+└───────────────────────────────────────────────────────┼──────────────────┘
+                                                        │ CCIP-Read
+                                                        ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                             L2 (Base)                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                       ConfigResolver                             │   │
+│   │  ─────────────────────────────────────────────────────────────  │   │
+│   │  • Stores text, address, contenthash records                    │   │
+│   │  • Users set records here (low gas)                             │   │
+│   │  • Authorizes via reverse node (user's address)                 │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**User Flow:**
+
+1. User calls `claim()` on L1 `AddressSubnameRegistrar` → creates `0x<address>.parent.eth` in ENS
+2. Subname is created with `L1ConfigResolver` as the resolver
+3. User sets records on L2 `ConfigResolver` (low gas)
+4. L1 resolution reads from L2 via CCIP-Read
+5. User can change their L1 resolver anytime (they own the ENS node)
+
+### Option B: L2-Only with Wildcard Resolution
+
+Simpler setup where everything lives on L2, and L1 uses wildcard resolution. Users cannot change their resolver.
+
+```
+L1: Parent name resolver = L1ConfigResolver (wildcard ENSIP-10)
+L2: ConfigResolver + AddressSubnameRegistrar
+```
+
+**Limitation:** Subnames don't exist in L1 ENS registry, so users cannot change their resolver.
 
 ## Prerequisites
 
@@ -30,126 +90,141 @@ cast wallet list
 
 ## Contract Addresses
 
-### Mainnet
+### ENS Addresses (same on all networks)
 
 | Contract     | Address                                      |
 | ------------ | -------------------------------------------- |
 | ENS Registry | `0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e` |
-| NameWrapper  | `0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401` |
+
+### Mainnet
+
+| Contract         | Address                                      |
+| ---------------- | -------------------------------------------- |
+| NameWrapper      | `0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401` |
+| Gateway Verifier | `0x0bC6c539e5fc1fb92F31dE34426f433557A9A5A2` |
 
 ### Sepolia
 
-| Contract     | Address                                      |
-| ------------ | -------------------------------------------- |
-| ENS Registry | `0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e` |
-| NameWrapper  | `0x0635513f179D50A207757E05759CbD106d7dFcE8` |
+| Contract         | Address                                      |
+| ---------------- | -------------------------------------------- |
+| NameWrapper      | `0x0635513f179D50A207757E05759CbD106d7dFcE8` |
+| Gateway Verifier | `0x7F68510F0fD952184ec0b976De429a29A2Ec0FE3` |
 
 ---
 
-## Step 1: Deploy ConfigResolver
+## Step 1: Deploy Contracts
 
-### Using the deploy script
+### Deploy ConfigResolver + AddressSubnameRegistrar
 
 ```bash
-# Deploy to Sepolia (default)
-./script/deploy.sh
+# Sepolia
+PARENT_NODE=$(cast namehash "yourname.eth") \
+  forge script script/Deploy.s.sol \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
 
-# Deploy to Mainnet
-./script/deploy.sh mainnet
+# Mainnet
+PARENT_NODE=$(cast namehash "yourname.eth") \
+  forge script script/Deploy.s.sol \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
 ```
 
-### Manual deployment
+### Deploy ConfigResolver Only
 
 ```bash
-# Set variables
-export RPC_URL="https://sepolia.gateway.tenderly.co"
-export ENS_REGISTRY="0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"
-export NAME_WRAPPER="0x0635513f179D50A207757E05759CbD106d7dFcE8"
-
-# Deploy
-forge create src/ConfigResolver.sol:ConfigResolver \
+forge script script/Deploy.s.sol --sig "deployConfigResolver()" \
   --rpc-url $RPC_URL \
   --account deployer \
-  --constructor-args $ENS_REGISTRY $NAME_WRAPPER \
-  --verify \
-  --etherscan-api-key $ETHERSCAN_API_KEY
+  --broadcast \
+  --verify
 ```
 
-Save the deployed address as `CONFIG_RESOLVER`.
+### Deploy L1ConfigResolver (CCIP-Read)
 
----
-
-## Step 2: Deploy AddressSubnameRegistrar
-
-First, compute the namehash of your parent name:
+For reading L2 records from L1:
 
 ```bash
-# Compute namehash for "ethconfig.eth"
-cast namehash "ethconfig.eth"
-# Returns: 0x... (your parent node)
-```
-
-Then deploy:
-
-```bash
-export PARENT_NODE=$(cast namehash "ethconfig.eth")
-export CONFIG_RESOLVER="0x..."  # From step 1
-
-forge create src/AddressSubnameRegistrar.sol:AddressSubnameRegistrar \
+L2_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Resolver()" \
   --rpc-url $RPC_URL \
   --account deployer \
-  --constructor-args $ENS_REGISTRY $NAME_WRAPPER $PARENT_NODE $CONFIG_RESOLVER \
-  --verify \
-  --etherscan-api-key $ETHERSCAN_API_KEY
+  --broadcast \
+  --verify
 ```
 
-Save the deployed address as `REGISTRAR`.
+**Environment Variables:**
+
+| Variable             | Required | Default           | Description                     |
+| -------------------- | -------- | ----------------- | ------------------------------- |
+| `L2_CONFIG_RESOLVER` | Yes      | -                 | Address of ConfigResolver on L2 |
+| `VERIFIER`           | No       | Chain-dependent\* | Gateway verifier address        |
+| `L2_CHAIN_ID`        | No       | Chain-dependent\* | L2 chain ID                     |
+
+\*Defaults: Mainnet → Base (8453) with `0x0bC6c539e5fc1fb92F31dE34426f433557A9A5A2`, Sepolia → Base Sepolia (84532) with `0x7F68510F0fD952184ec0b976De429a29A2Ec0FE3`
+
+**Custom L2 deployment (non-Base chains):**
+
+```bash
+# Example: Deploy for Arbitrum
+VERIFIER=0x... \
+L2_CHAIN_ID=42161 \
+L2_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Resolver()" \
+  --rpc-url $RPC_URL \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+### Deploy L1 AddressSubnameRegistrar (Option A)
+
+For L1 claiming with L2 storage - deploy after L1ConfigResolver:
+
+```bash
+# Sepolia
+PARENT_NODE=$(cast namehash "yourname.eth") \
+L1_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Registrar()" \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+
+# Mainnet
+PARENT_NODE=$(cast namehash "yourname.eth") \
+L1_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Registrar()" \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+Save the deployed addresses for the next steps.
 
 ---
 
-## Step 3: Authorize the Registrar
+## Step 2: Authorize the Registrar
 
-The registrar needs permission to create subnames. First, check if your name is wrapped.
-
-### Check if your name is wrapped
-
-```bash
-# Check who owns the node in ENS Registry
-cast call $ENS_REGISTRY "owner(bytes32)(address)" $PARENT_NODE --rpc-url $RPC_URL
-```
-
-- If the result is the **NameWrapper address** → your name is **wrapped** (Option B)
-- If the result is **your address** → your name is **unwrapped** (Option A)
-
-### Option A: Unwrapped Name
-
-Transfer ownership of the parent name to the registrar:
-
-```bash
-# Transfer ownership to the registrar
-cast send $ENS_REGISTRY "setOwner(bytes32,address)" \
-  $PARENT_NODE \
-  $REGISTRAR \
-  --rpc-url $RPC_URL \
-  --account deployer
-```
-
-> ⚠️ **Warning**: This transfers full control. Consider using a wrapper or approval instead.
-
-### Option B: Wrapped Name (Recommended)
-
-If your name is wrapped in NameWrapper, you need to approve the registrar as an operator.
+The registrar needs permission to create subnames under your wrapped name.
 
 > ⚠️ **Important**: The approval must come from the **actual owner** of the wrapped name, not the deployer (unless they're the same).
 
-**Step 1: Find the wrapped name owner**
+### Find the wrapped name owner
 
 ```bash
+export PARENT_NODE=$(cast namehash "yourname.eth")
+
 # Check who owns the wrapped name
 cast call $NAME_WRAPPER "ownerOf(uint256)(address)" $PARENT_NODE --rpc-url $RPC_URL
 ```
 
-**Step 2: Approve the registrar (from the owner's account)**
+### Approve the registrar
 
 ```bash
 # Approve registrar to manage your wrapped names
@@ -161,45 +236,18 @@ cast send $NAME_WRAPPER "setApprovalForAll(address,bool)" \
   --account <owner-account>  # Must be the wrapped name owner
 ```
 
-For example, if the owner is in a keystore called `user`:
-
-```bash
-cast send $NAME_WRAPPER "setApprovalForAll(address,bool)" \
-  $REGISTRAR \
-  true \
-  --rpc-url $RPC_URL \
-  --account user
-```
-
 ---
 
-## Step 4: Enable Wildcard Resolution (ENSIP-10)
+## Step 3: Enable Wildcard Resolution (ENSIP-10)
 
-The ConfigResolver supports wildcard resolution, allowing `<address>.yourname.eth` to resolve without users needing to claim the subname first. This enables:
-
-- **Address resolution**: `<address>.yourname.eth` automatically resolves to that address
-- **Text records**: Users can set records that resolve via any parent name
+The ConfigResolver supports wildcard resolution, allowing `0x<address>.yourname.eth` to resolve without users needing to claim the subname first.
 
 ### Set ConfigResolver as the parent name's resolver
-
-For wildcard resolution to work, your parent name must use the ConfigResolver as its resolver.
-
-**For wrapped names (NameWrapper):**
 
 ```bash
 # Set ConfigResolver as the resolver for your parent name
 # Run this from the wrapped name OWNER's account
 cast send $NAME_WRAPPER "setResolver(bytes32,address)" \
-  $PARENT_NODE \
-  $CONFIG_RESOLVER \
-  --rpc-url $RPC_URL \
-  --account <owner-account>
-```
-
-**For unwrapped names (ENS Registry):**
-
-```bash
-cast send $ENS_REGISTRY "setResolver(bytes32,address)" \
   $PARENT_NODE \
   $CONFIG_RESOLVER \
   --rpc-url $RPC_URL \
@@ -218,21 +266,9 @@ cast call $ENS_REGISTRY "resolver(bytes32)(address)" $PARENT_NODE --rpc-url $RPC
 # Should return: your CONFIG_RESOLVER address
 ```
 
-### How it works
-
-Once enabled, any lookup for `<address>.yourname.eth` will:
-
-1. ENS checks if the subname exists → it doesn't (not claimed)
-2. ENS falls back to the parent's resolver (ConfigResolver)
-3. ConfigResolver's `resolve()` function handles the request:
-   - For `addr()`: Returns the address from the subdomain label
-   - For `text()`: Looks up records stored under the user's reverse node
-
-This means users can set records once (via their reverse node) and have them resolve under any parent name that uses ConfigResolver.
-
 ---
 
-## Step 5: Verify Deployment
+## Step 4: Verify Deployment
 
 ### Check ConfigResolver
 
@@ -259,6 +295,23 @@ cast call $REGISTRAR "defaultResolver()" --rpc-url $RPC_URL
 cast call $REGISTRAR "available(address)" "0x8d25687829D6b85d9e0020B8c89e3Ca24dE20a89" --rpc-url $RPC_URL
 ```
 
+### Check L1ConfigResolver
+
+```bash
+# Verify it supports IExtendedResolver
+cast call $L1_RESOLVER "supportsInterface(bytes4)" "0x9061b923" --rpc-url $RPC_URL
+# Should return: true (0x01)
+
+# Check the L2 chain ID
+cast call $L1_RESOLVER "l2ChainId()(uint256)" --rpc-url $RPC_URL
+
+# Check the L2 target
+cast call $L1_RESOLVER "l2ConfigResolver()(address)" --rpc-url $RPC_URL
+
+# Check the verifier
+cast call $L1_RESOLVER "verifier()(address)" --rpc-url $RPC_URL
+```
+
 ---
 
 ## Usage
@@ -274,7 +327,7 @@ cast send $REGISTRAR "claim()" \
   --account user-wallet
 ```
 
-This creates `<address>.ethconfig.eth` for the caller.
+This creates `0x<address>.yourname.eth` for the caller (e.g., `0x8d25687829d6b85d9e0020b8c89e3ca24de20a89.yourname.eth`).
 
 ### Setting Records on Claimed Subnames
 
@@ -389,33 +442,35 @@ const hash = await walletClient.writeContract({
 
 ## Deployed Contracts
 
-After deployment, update this section with your addresses:
+### Testnets
 
-| Network | Contract                | Address |
-| ------- | ----------------------- | ------- |
-| Sepolia | ConfigResolver          | `0x...` |
-| Sepolia | AddressSubnameRegistrar | `0x...` |
-| Mainnet | ConfigResolver          | `0x...` |
-| Mainnet | AddressSubnameRegistrar | `0x...` |
+| Network      | Contract         | Address                                                                                                                         |
+| ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Base Sepolia | ConfigResolver   | [`0xA66c55a6b76967477af18A03F2f12d52251Dc2C0`](https://sepolia.basescan.org/address/0xA66c55a6b76967477af18A03F2f12d52251Dc2C0) |
+| Sepolia      | L1ConfigResolver | [`0x380e926f5D78F21b80a6EfeF2B3CEf9CcC89356B`](https://sepolia.etherscan.io/address/0x380e926f5D78F21b80a6EfeF2B3CEf9CcC89356B) |
+
+### Mainnet
+
+| Network  | Contract         | Address |
+| -------- | ---------------- | ------- |
+| Base     | ConfigResolver   | TBD     |
+| Ethereum | L1ConfigResolver | TBD     |
 
 ---
 
 ## Troubleshooting
 
-### "Unauthorised" error when claiming (wrapped names)
+### "Unauthorised" error when claiming
 
 This is the most common issue. It means the registrar is not approved to create subnames.
 
 **Diagnosis:**
 
 ```bash
-# 1. Check if the name is wrapped (owned by NameWrapper in registry)
-cast call $ENS_REGISTRY "owner(bytes32)(address)" $PARENT_NODE --rpc-url $RPC_URL
-
-# 2. If wrapped, find the actual owner
+# 1. Find the wrapped name owner
 cast call $NAME_WRAPPER "ownerOf(uint256)(address)" $PARENT_NODE --rpc-url $RPC_URL
 
-# 3. Check if the registrar is approved by that owner
+# 2. Check if the registrar is approved by that owner
 cast call $NAME_WRAPPER "isApprovedForAll(address,address)(bool)" \
   <owner-address> \
   $REGISTRAR \
@@ -444,7 +499,6 @@ cast send $NAME_WRAPPER "setApprovalForAll(address,bool)" \
 
 ### Registrar can't create subnames
 
-- Ensure the registrar is the owner of the parent node, OR
 - Ensure the registrar is approved via NameWrapper **by the wrapped name owner**
 
 ### Records not being set
@@ -454,14 +508,138 @@ cast send $NAME_WRAPPER "setApprovalForAll(address,bool)" \
 
 ---
 
+## Full Deployment Workflow (Option A)
+
+This is the complete workflow for deploying the L1 claiming with L2 storage architecture.
+
+### Step 1: Deploy ConfigResolver on L2 (Base)
+
+```bash
+# Base Sepolia
+forge script script/Deploy.s.sol --sig "deployConfigResolver()" \
+  --rpc-url https://base-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+
+# Base Mainnet
+forge script script/Deploy.s.sol --sig "deployConfigResolver()" \
+  --rpc-url https://base-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+Save the L2 ConfigResolver address as `L2_CONFIG_RESOLVER`.
+
+### Step 2: Deploy L1ConfigResolver on L1
+
+```bash
+# Sepolia
+L2_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Resolver()" \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+
+# Mainnet
+L2_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Resolver()" \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+Save the L1ConfigResolver address as `L1_CONFIG_RESOLVER`.
+
+### Step 3: Deploy L1 AddressSubnameRegistrar
+
+```bash
+# Sepolia
+PARENT_NODE=$(cast namehash "yourname.eth") \
+L1_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Registrar()" \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+
+# Mainnet
+PARENT_NODE=$(cast namehash "yourname.eth") \
+L1_CONFIG_RESOLVER=0x... \
+  forge script script/Deploy.s.sol --sig "deployL1Registrar()" \
+  --rpc-url https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account deployer \
+  --broadcast \
+  --verify
+```
+
+Save the L1 AddressSubnameRegistrar address as `L1_REGISTRAR`.
+
+### Step 4: Authorize L1 Registrar
+
+The L1 registrar needs permission to create subnames under your wrapped parent name.
+
+```bash
+# From the wrapped name owner's account
+cast send $NAME_WRAPPER "setApprovalForAll(address,bool)" \
+  $L1_REGISTRAR \
+  true \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account <owner-account>
+```
+
+### Step 5: User Claims on L1
+
+Users can now claim their subname on L1:
+
+```bash
+cast send $L1_REGISTRAR "claim()" \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account user-wallet
+```
+
+### Step 6: User Sets Records on L2
+
+Users set their records on the L2 ConfigResolver:
+
+```bash
+# Get the user's node hash
+USER_NODE=$(cast call $L1_REGISTRAR "node(address)(bytes32)" $USER_ADDRESS \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY)
+
+# Set a text record on L2
+cast send $L2_CONFIG_RESOLVER "setText(bytes32,string,string)" \
+  $USER_NODE \
+  "url" \
+  "https://example.com" \
+  --rpc-url https://base-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account user-wallet
+```
+
+### Step 7: (Optional) User Changes Resolver
+
+Users who want a different resolver can change it on L1 (they own the wrapped subname):
+
+```bash
+# User changes their resolver via NameWrapper
+cast send $NAME_WRAPPER "setResolver(bytes32,address)" \
+  $USER_NODE \
+  $NEW_RESOLVER \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/$ALCHEMY_API_KEY \
+  --account user-wallet
+```
+
+---
+
 ## Security Considerations
 
-1. **Parent name ownership**: Once you transfer the parent name to the registrar, you lose direct control. Consider using NameWrapper approvals instead.
+1. **Subname ownership**: Users fully own their claimed subnames and can set any records.
 
-2. **Subname ownership**: Users fully own their claimed subnames and can set any records.
+2. **No fees**: This implementation doesn't charge fees. Add payment logic if needed.
 
-3. **No fees**: This implementation doesn't charge fees. Add payment logic if needed.
+3. **No expiry**: Subnames don't expire unless the parent expires. Consider adding reclaim logic.
 
-4. **No expiry**: Subnames don't expire unless the parent expires. Consider adding reclaim logic.
-
-5. **Wrapped names**: If the parent is wrapped, subnames will be wrapped too with inherited fuses.
+4. **Wrapped subnames**: Since the parent is wrapped, subnames will be wrapped too with inherited fuses.

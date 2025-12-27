@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity >=0.8.17 <0.9.0;
+pragma solidity ^0.8.25;
 
 import "@ensdomains/ens-contracts/registry/ENS.sol";
 import "@ensdomains/ens-contracts/resolvers/profiles/ABIResolver.sol";
@@ -125,7 +125,7 @@ contract ConfigResolver is
         return owner == msg.sender || isApprovedForAll(owner, msg.sender) || isApprovedFor(owner, node, msg.sender);
     }
 
-    /// @dev ENSIP-10 wildcard resolution. Resolves subnames like <address>.parent.eth
+    /// @dev ENSIP-10 wildcard resolution. Resolves subnames like 0x<address>.parent.eth
     /// without requiring them to be claimed in ENS, and also supports standard resolution
     /// for manually created names.
     /// @param name The DNS-encoded name to resolve
@@ -135,11 +135,16 @@ contract ConfigResolver is
         // Extract the first label length
         uint256 labelLen = uint8(name[0]);
 
-        // If this is a 40-char hex address label, handle wildcard resolution
-        if (labelLen == 40) {
-            // Parse the hex address from the label
-            bytes memory label = name[1:41];
-            (address resolvedAddr, bool valid) = label.hexToAddress(0, 40);
+        // If this is a 42-char hex address label (0x + 40 hex chars), handle wildcard resolution
+        if (labelLen == 42) {
+            // Parse the hex address from the label (skip "0x" prefix)
+            bytes memory label = name[1:43];
+            // Verify "0x" prefix
+            if (label[0] != 0x30 || label[1] != 0x78) {
+                // '0' = 0x30, 'x' = 0x78
+                revert("Invalid address prefix");
+            }
+            (address resolvedAddr, bool valid) = label.hexToAddress(2, 42);
             if (!valid) {
                 revert("Invalid hex address");
             }
